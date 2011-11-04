@@ -26,11 +26,13 @@
 #include <math.h>
 #include <sys/select.h>
 #include <unistd.h>
-#include <err.h>
+#include <locale.h>
 
-#include "nls.h"
+#define _(Text) (Text)
 
 #define SCRIPT_MIN_DELAY 0.0001		/* from original sripreplay.pl */
+
+static const char* program_invocation_short_name;
 
 void __attribute__((__noreturn__))
 usage(int rc)
@@ -38,6 +40,37 @@ usage(int rc)
 	printf(_("%s <timingfile> [<typescript> [<divisor>]]\n"),
 			program_invocation_short_name);
 	exit(rc);
+}
+
+static void err(int eval, const char* fmt, ...)
+{
+	int err = errno;
+
+	if (fmt)
+	{
+		va_list ap;
+		va_start(ap, fmt);
+		vfprintf(stderr, fmt, ap);
+		va_end(ap);
+		fputs(": ", stderr);
+	}
+
+	fprintf(stderr, "%s\n", strerror(err));
+	exit(eval);
+}
+
+static void errx(int eval, const char* fmt, ...)
+{
+	if (fmt)
+	{
+		va_list ap;
+		va_start(ap, fmt);
+		vfprintf(stderr, fmt, ap);
+		va_end(ap);
+		fputs("\n", stderr);
+	}
+
+	exit(eval);
 }
 
 static double
@@ -123,15 +156,14 @@ main(int argc, char *argv[])
 	unsigned long line;
 	size_t oldblk = 0;
 
+	program_invocation_short_name = argv[0];
+
 	/* Because we use space as a separator, we can't afford to use any
 	 * locale which tolerates a space in a number.  In any case, script.c
 	 * sets the LC_NUMERIC locale to C, anyway.
 	 */
 	setlocale(LC_ALL, "");
 	setlocale(LC_NUMERIC, "C");
-
-	bindtextdomain(PACKAGE, LOCALEDIR);
-	textdomain(PACKAGE);
 
 	if (argc < 2 || 4  < argc)
 		usage(EXIT_FAILURE);

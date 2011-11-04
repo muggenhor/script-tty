@@ -31,121 +31,123 @@
 .\"
 .\"	@(#)script.1	6.5 (Berkeley) 7/27/91
 .\"
-.Dd July 30, 2000
-.Dt SCRIPT 1
-.Os Linux
-.Sh NAME
-.Nm script
-.Nd make typescript of terminal session
-.Sh SYNOPSIS
-.Nm script
-.Op Fl a
-.Op Fl c Ar COMMAND
-.Op Fl e
-.Op Fl f
-.Op Fl q
-.Op Fl t
-.Op Ar file
-.Sh DESCRIPTION
-.Nm Script
+.TH SCRIPT 1 "July 30, 2000" "Linux"
+.SH NAME
+\fBscript\fP \- make typescript of terminal session
+.SH SYNOPSIS
+.BR script
+[\fB\-a\fP]
+[\fB\-c\fP] \fICOMMAND\fP
+[\fB\-e\fP]
+[\fB\-f\fP]
+[\fB\-q\fP]
+[\fB\-t\fP]
+.RI [ \fIfile\fP ]
+.SH DESCRIPTION
+.B Script
 makes a typescript of everything printed on your terminal.
 It is useful for students who need a hardcopy record of an interactive
 session as proof of an assignment, as the typescript file 
 can be printed out later with
-.Xr lpr 1 .
-.Pp
+lpr(1).
+.PP
 If the argument
-.Ar file
+.I file
 is given,
-.Nm
+.B script
 saves all dialogue in
-.Ar file .
+.I file.
 If no file name is given, the typescript is saved in the file
-.Pa typescript  .
-.Pp
+.I typescript.
+.PP
 Options:
-.Bl -tag -width Ds
-.It Fl a
+.TP 12
+.B \-a
 Append the output to
-.Ar file
+.I file
 or
-.Pa typescript ,
+.I typescript,
 retaining the prior contents.
-.It Fl c Ar COMMAND
+.TP
+\fB\-c\fP \fICOMMAND\fP
 Run the COMMAND rather than an interactive shell.
 This makes it easy for a script to capture the output of a program that
 behaves differently when its stdout is not a tty.
-.It Fl e
+.TP
+.B \-e
 Return the exit code of the child process. Uses the same format as bash
 termination on signal termination exit code is 128+n.
-.It Fl f
+.TP
+.B \-f
 Flush output after each write. This is nice for telecooperation:
 One person does `mkfifo foo; script -f foo' and another can
 supervise real-time what is being done using `cat foo'.
-.It Fl q
+.TP
+.B \-q
 Be quiet.
-.It Fl t
+.TP
+.B \-t
 Output timing data to standard error. This data contains two fields,
 separated by a space. The first field indicates how much time elapsed since
 the previous output. The second field indicates how many characters were
 output this time. This information can be used to replay typescripts with
 realistic typing and output delays.
-.El
-.Pp
+.PP
 The script ends when the forked shell exits (a
-.Em control-D
+.I control-D
 to exit
 the Bourne shell
-.Pf ( Xr sh 1 ) ,
+(sh(1)),
 and
-.Em exit , 
-.Em logout
+.I exit,
+.I logout
 or
-.Em control-d
+.I control-d
 (if
-.Em ignoreeof
+.I ignoreeof
 is not set) for the
 C-shell,
-.Xr csh 1 ) .
-.Pp
+csh(1).
+.PP
 Certain interactive commands, such as
-.Xr vi 1 ,
+vi(1),
 create garbage in the typescript file.
-.Nm Script
+.B Script
 works best with commands that do not manipulate the
 screen, the results are meant to emulate a hardcopy
 terminal.
-.Sh ENVIRONMENT
+.SH ENVIRONMENT
 The following environment variable is utilized by
-.Nm script :
-.Bl -tag -width SHELL
-.It Ev SHELL
+.B script:
+.TP 7
+SHELL
 If the variable
-.Ev SHELL
+SHELL
 exists, the shell forked by
-.Nm script
+.B script
 will be that shell. If
-.Ev SHELL
+SHELL
 is not set, the Bourne shell
 is assumed. (Most shells set this variable automatically).
-.El
-.Sh SEE ALSO
-.Xr csh 1
+.PP
+.SH SEE ALSO
+csh(1)
 (for the
-.Em history
+.I history
 mechanism),
-.Xr scriptreplay 1 .
-.Sh HISTORY
+scriptreplay(1).
+.SH HISTORY
 The
-.Nm script
+.B script
 command appeared in
-.Bx 3.0 .
-.Sh BUGS
-.Nm Script
+3.0BSD.
+.SH BUGS
+.B Script
 places
-.Sy everything
+.B everything
 in the log file, including linefeeds and backspaces.
 This is not what the naive user expects.
-.Sh AVAILABILITY
+.SH AVAILABILITY
 The script command is part of the util-linux package and is available from
+.PP
 ftp://ftp.kernel.org/pub/linux/utils/util-linux/.

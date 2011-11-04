@@ -43,7 +43,6 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <paths.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -56,15 +55,14 @@
 #include <string.h>
 #include <getopt.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <locale.h>
+#include <stropts.h>
 
-#include "nls.h"
+#define _(Text) (Text)
 
-#if HAVE_LIBUTIL && HAVE_PTY_H
-#include <pty.h>
-#endif
-
-#ifdef HAVE_LIBUTEMPTER
-#include <utempter.h>
+#ifndef _PATH_BSHELL
+# define _PATH_BSHELL "/home/gschijnd/usr/bin/zsh"
 #endif
 
 void finish(int);
@@ -91,9 +89,6 @@ struct	termios tt;
 struct	winsize win;
 int	lb;
 int	l;
-#if !HAVE_LIBUTIL || !HAVE_PTY_H
-char	line[] = "/dev/ptyXX";
-#endif
 int	aflg = 0;
 char	*cflg = NULL;
 int	eflg = 0;
@@ -145,13 +140,11 @@ main(int argc, char **argv) {
 
 	setlocale(LC_ALL, "");
 	setlocale(LC_NUMERIC, "C");	/* see comment above */
-	bindtextdomain(PACKAGE, LOCALEDIR);
-	textdomain(PACKAGE);
 
 	if (argc == 2) {
 		if (!strcmp(argv[1], "-V") || !strcmp(argv[1], "--version")) {
-			printf(_("%s (%s)\n"),
-			       progname, PACKAGE_STRING);
+			printf(_("%s (giel-customized-script 0.1)\n"),
+			       progname/* , PACKAGE_STRING */);
 			return 0;
 		}
 	}
@@ -205,9 +198,6 @@ main(int argc, char **argv) {
 		printf(_("Script started, file is %s\n"), fname);
 	fixtty();
 
-#ifdef HAVE_LIBUTEMPTER
-	utempter_add_record(master, NULL);
-#endif
 	/* setup SIGCHLD handler */
 	sigemptyset(&sa.sa_mask);
 	sa.sa_flags = 0;
@@ -318,9 +308,7 @@ dooutput() {
 	ssize_t fwrt;
 
 	(void) close(0);
-#ifdef HAVE_LIBUTIL
 	(void) close(slave);
-#endif
 	tvec = time((time_t *)NULL);
 	my_strftime(obuf, sizeof obuf, "%c\n", localtime(&tvec));
 	fprintf(fscript, _("Script started on %s"), obuf);
@@ -377,12 +365,8 @@ dooutput() {
 
 void
 doshell() {
-	char *shname;
-
 #if 0
-	int t;
-
-	t = open(_PATH_DEV_TTY, O_RDWR);
+	int t = open(_PATH_DEV_TTY, O_RDWR);
 	if (t >= 0) {
 		(void) ioctl(t, TIOCNOTTY, (char *)0);
 		(void) close(t);
@@ -399,7 +383,7 @@ doshell() {
 
 	master = -1;
 
-	shname = strrchr(shell, '/');
+	char* shname = strrchr(shell, '/');
 	if (shname)
 		shname++;
 	else
@@ -419,8 +403,14 @@ fixtty() {
 	struct termios rtt;
 
 	rtt = tt;
-	cfmakeraw(&rtt);
-	rtt.c_lflag &= ~ECHO;
+	/* Set host terminal to raw mode. */
+	rtt.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+	rtt.c_oflag &= ~OPOST;
+	rtt.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+	rtt.c_cflag &= ~(CSIZE | PARENB);
+	rtt.c_cflag |= CS8;
+	rtt.c_cc[VMIN] = 1; /* read returns when one char is available.  */
+	rtt.c_cc[VTIME] = 0;
 	(void) tcsetattr(0, TCSANOW, &rtt);
 }
 
@@ -450,10 +440,6 @@ done() {
 		(void) tcsetattr(0, TCSADRAIN, &tt);
 		if (!qflg)
 			printf(_("Script done, file is %s\n"), fname);
-#ifdef HAVE_LIBUTEMPTER
-		if (master >= 0)
-			utempter_remove_record(master);
-#endif
 	}
 
 	if(eflg) {
@@ -467,63 +453,27 @@ done() {
 
 void
 getmaster() {
-#if HAVE_LIBUTIL && HAVE_PTY_H
 	(void) tcgetattr(0, &tt);
 	(void) ioctl(0, TIOCGWINSZ, (char *)&win);
-	if (openpty(&master, &slave, NULL, &tt, &win) < 0) {
-		fprintf(stderr, _("openpty failed\n"));
+	master = open("/dev/ptmx", O_RDWR);
+	if (master  < 0) {
+		fprintf(stderr, _("opening a pty using /dev/ptmx failed\n"));
 		fail();
 	}
-#else
-	char *pty, *bank, *cp;
-	struct stat stb;
-
-	pty = &line[strlen("/dev/ptyp")];
-	for (bank = "pqrs"; *bank; bank++) {
-		line[strlen("/dev/pty")] = *bank;
-		*pty = '0';
-		if (stat(line, &stb) < 0)
-			break;
-		for (cp = "0123456789abcdef"; *cp; cp++) {
-			*pty = *cp;
-			master = open(line, O_RDWR);
-			if (master >= 0) {
-				char *tp = &line[strlen("/dev/")];
-				int ok;
-
-				/* verify slave side is usable */
-				*tp = 't';
-				ok = access(line, R_OK|W_OK) == 0;
-				*tp = 'p';
-				if (ok) {
-					(void) tcgetattr(0, &tt);
-				    	(void) ioctl(0, TIOCGWINSZ, 
-						(char *)&win);
-					return;
-				}
-				(void) close(master);
-				master = -1;
-			}
-		}
-	}
-	master = -1;
-	fprintf(stderr, _("Out of pty's\n"));
-	fail();
-#endif /* not HAVE_LIBUTIL */
 }
 
 void
 getslave() {
-#ifndef HAVE_LIBUTIL
-	line[strlen("/dev/")] = 't';
-	slave = open(line, O_RDWR);
-	if (slave < 0) {
-		perror(line);
+	if (grantpt(master) == -1
+	 || unlockpt(master) == -1
+	 || (slave = open(ptsname(master), O_RDWR)) == -1
+	 || ioctl(slave, I_PUSH, "ptem") == -1      /* push ptem */
+	 || ioctl(slave, I_PUSH, "ldterm") == -1) { /* push ldterm*/
+		perror(ptsname(master));
 		fail();
 	}
 	(void) tcsetattr(slave, TCSANOW, &tt);
 	(void) ioctl(slave, TIOCSWINSZ, (char *)&win);
-#endif
 	(void) setsid();
 	(void) ioctl(slave, TIOCSCTTY, 0);
 }
