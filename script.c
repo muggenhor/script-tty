@@ -336,8 +336,8 @@ dooutput() {
 		if (cc <= 0)
 			break;
 		if (tflg) {
-			newtime = tv.tv_sec + (double) tv.tv_usec / 1000000;
-			fprintf(stderr, "%f %zd\n", newtime - oldtime, cc);
+			newtime = tv.tv_sec + tv.tv_usec / 1000000.;
+			fprintf(stderr, "%020.16lf %zd\n", newtime - oldtime, cc);
 			oldtime = newtime;
 		}
 		wrt = write(1, obuf, cc);
