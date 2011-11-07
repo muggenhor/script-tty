@@ -1,4 +1,4 @@
-bin_PROGRAMS = reset script scriptreplay
+bin_PROGRAMS = script scriptreplay
 man1_PAGES = reset.1 script.1 scriptreplay.1
 CC = gcc -std=gnu99
 CPPFLAGS =
@@ -16,10 +16,14 @@ script: script.c
 scriptreplay: scriptreplay.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^
 
-install: all
-	$(INSTALL) -m 755 -d $(DESTDIR)/bin/
-	$(INSTALL) -m 755 $(bin_PROGRAMS) $(DESTDIR)/bin/
-	$(INSTALL) -m 755 -d $(DESTDIR)/share/man/man1/
-	$(INSTALL) -m 644 $(man1_PAGES) $(DESTDIR)/share/man/man1/
+install-bin: $(bin_PROGRAMS) reset
+	$(INSTALL) -m 755 -d $(DESTDIR)$(PREFIX)/bin/
+	$(INSTALL) -m 755 $^ $(DESTDIR)$(PREFIX)/bin/
 
-.PHONY: all clean install
+install-man: $(man1_PAGES)
+	$(INSTALL) -m 755 -d $(DESTDIR)$(PREFIX)/share/man/man1/
+	$(INSTALL) -m 644 $^ $(DESTDIR)$(PREFIX)/share/man/man1/
+
+install: install-bin install-man
+
+.PHONY: all clean install install-bin install-man
