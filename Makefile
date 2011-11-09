@@ -2,7 +2,7 @@ bin_PROGRAMS = script scriptreplay
 man1_PAGES = reset.1 script.1 scriptreplay.1
 CC = gcc -std=gnu99
 CPPFLAGS =
-CFLAGS = -g -O2
+CFLAGS = -g -O2 -Wall
 INSTALL = ginstall
 
 all: $(bin_PROGRAMS)
