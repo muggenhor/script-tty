@@ -289,8 +289,8 @@ void
 resize(int dummy __attribute__ ((__unused__))) {
 	resized = 1;
 	/* transmit window change information to the child */
-	(void) ioctl(0, TIOCGWINSZ, (char *)&win);
-	(void) ioctl(slave, TIOCSWINSZ, (char *)&win);
+	(void) ioctl(0, TIOCGWINSZ, &win);
+	(void) ioctl(slave, TIOCSWINSZ, &win);
 }
 
 /*
@@ -460,7 +460,7 @@ done() {
 void
 getmaster() {
 	(void) tcgetattr(0, &tt);
-	(void) ioctl(0, TIOCGWINSZ, (char *)&win);
+	(void) ioctl(0, TIOCGWINSZ, &win);
 	master = open("/dev/ptmx", O_RDWR);
 	if (master  < 0) {
 		fprintf(stderr, _("opening a pty using /dev/ptmx failed\n"));
@@ -479,7 +479,7 @@ getslave() {
 		fail();
 	}
 	(void) tcsetattr(slave, TCSANOW, &tt);
-	(void) ioctl(slave, TIOCSWINSZ, (char *)&win);
+	(void) ioctl(slave, TIOCSWINSZ, &win);
 	(void) setsid();
 	(void) ioctl(slave, TIOCSCTTY, 0);
 }
