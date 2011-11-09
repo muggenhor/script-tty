@@ -61,6 +61,12 @@
 
 #define _(Text) (Text)
 
+// Work around bad NULL definition *somewhere* in our headers
+#ifdef NULL
+# undef NULL
+#endif
+#define NULL ((void*)0)
+
 #ifndef _PATH_BSHELL
 # define _PATH_BSHELL "/home/gschijnd/usr/bin/zsh"
 #endif
