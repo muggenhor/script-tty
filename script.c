@@ -250,6 +250,7 @@ doinput() {
 	register int cc;
 	char ibuf[BUFSIZ];
 
+	(void) close(1);
 	(void) fclose(fscript);
 
 	while (die == 0) {
@@ -290,7 +291,7 @@ resize(int dummy __attribute__ ((__unused__))) {
 	resized = 1;
 	/* transmit window change information to the child */
 	(void) ioctl(0, TIOCGWINSZ, &win);
-	(void) ioctl(slave, TIOCSWINSZ, &win);
+	(void) ioctl(master, TIOCSWINSZ, &win);
 }
 
 /*
