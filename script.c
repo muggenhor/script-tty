@@ -58,6 +58,7 @@
 #include <fcntl.h>
 #include <locale.h>
 #include <stropts.h>
+#include <sysexits.h>
 
 #define _(Text) (Text)
 
@@ -73,14 +74,14 @@
 
 void finish(int);
 void done(void);
-void fail(void);
+static void fail(void);
 void resize(int);
-void fixtty(void);
+static void fixtty(const struct termios*);
 void getmaster(void);
 static int getslave(int master, const struct termios* origtty);
-void doinput(void);
+static void doinput(const struct termios* origtty);
 void dooutput(void);
-void doshell(void);
+static int doshell(const struct termios* origtty);
 
 char	*shell;
 int	master = -1;
@@ -89,7 +90,6 @@ int	subchild;
 int	childstatus;
 char	*fname;
 
-struct	termios tt;
 int	lb;
 int	l;
 int	aflg = 0;
@@ -195,7 +195,10 @@ main(int argc, char **argv) {
 	getmaster();
 	if (!qflg)
 		printf(_("Script started, file is %s\n"), fname);
-	fixtty();
+
+	struct termios origtty;
+	tcgetattr(STDIN_FILENO, &origtty);
+	fixtty(&origtty);
 
 	/* setup SIGCHLD handler */
 	sigemptyset(&sa.sa_mask);
@@ -228,18 +231,18 @@ main(int argc, char **argv) {
 		if (child)
 			dooutput();
 		else
-			doshell();
+			doshell(&origtty);
 	} else {
 		sa.sa_handler = resize;
 		sigaction(SIGWINCH, &sa, NULL);
 	}
-	doinput();
+	doinput(&origtty);
 
 	return 0;
 }
 
 void
-doinput() {
+doinput(const struct termios* origtty) {
 	register int cc;
 	char ibuf[BUFSIZ];
 
@@ -252,6 +255,7 @@ doinput() {
 				int err = errno;
 				fprintf (stderr, _("%s: write error %d: %s\n"),
 					progname, err, strerror(err));
+				tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
 				fail();
 			}
 		}
@@ -261,6 +265,7 @@ doinput() {
 			break;
 	}
 
+	tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
 	done();
 }
 
@@ -371,8 +376,9 @@ dooutput() {
 	done();
 }
 
-void
-doshell() {
+static int
+doshell(const struct termios* origtty)
+{
 #if 0
 	int t = open(_PATH_DEV_TTY, O_RDWR);
 	if (t >= 0) {
@@ -381,7 +387,7 @@ doshell() {
 	}
 #endif
 
-	const int slave = getslave(master, &tt);
+	const int slave = getslave(master, origtty);
 	(void) close(master);
 	(void) dup2(slave, 0);
 	(void) dup2(slave, 1);
@@ -403,13 +409,14 @@ doshell() {
 
 	perror(shell);
 	fail();
+
+	return EX_OSERR;
 }
 
-void
-fixtty() {
-	struct termios rtt;
+static void
+fixtty(const struct termios* origtty) {
+	struct termios rtt = *origtty;
 
-	rtt = tt;
 	/* Set host terminal to raw mode. */
 	rtt.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
 	rtt.c_oflag &= ~OPOST;
@@ -421,7 +428,7 @@ fixtty() {
 	(void) tcsetattr(0, TCSANOW, &rtt);
 }
 
-void
+static void
 fail() {
 
 	(void) kill(0, SIGTERM);
@@ -435,7 +442,6 @@ done() {
 
 		master = -1;
 	} else {
-		(void) tcsetattr(0, TCSADRAIN, &tt);
 		if (!qflg)
 			printf(_("Script done, file is %s\n"), fname);
 	}
@@ -451,7 +457,6 @@ done() {
 
 void
 getmaster() {
-	(void) tcgetattr(0, &tt);
 	master = open("/dev/ptmx", O_RDWR);
 	if (master == -1
 	 || grantpt(master) == -1
