@@ -73,14 +73,14 @@
 #endif
 
 void finish(int);
-void done(void);
+static int done(void);
 static void fail(void);
 void resize(int);
 static void fixtty(const struct termios*);
 void getmaster(void);
 static int getslave(int master, const struct termios* origtty);
-static void doinput(const struct termios* origtty);
-void dooutput(void);
+static int doinput(const struct termios* origtty);
+static int dooutput(void);
 static int doshell(const struct termios* origtty);
 
 static int master = -1;
@@ -103,7 +103,7 @@ int die;
 int resized;
 
 static void
-die_if_link(char *fn) {
+die_if_link(const char *fn) {
 	struct stat s;
 
 	if (lstat(fn, &s) == 0 && (S_ISLNK(s.st_mode) || s.st_nlink > 1)) {
@@ -174,7 +174,7 @@ main(int argc, char **argv) {
 		default:
 			fprintf(stderr,
 				_("usage: script [-a] [-e] [-f] [-q] [-t] [file]\n"));
-			exit(1);
+			return EX_USAGE;
 		}
 	argc -= optind;
 	argv += optind;
@@ -223,19 +223,18 @@ main(int argc, char **argv) {
 			fail();
 		}
 		if (child)
-			dooutput();
+			return dooutput();
 		else
-			doshell(&origtty);
+			return doshell(&origtty);
 	} else {
 		sa.sa_handler = resize;
 		sigaction(SIGWINCH, &sa, NULL);
 	}
-	doinput(&origtty);
 
-	return 0;
+	return doinput(&origtty);
 }
 
-void
+static int
 doinput(const struct termios* origtty) {
 	register int cc;
 	char ibuf[BUFSIZ];
@@ -262,7 +261,7 @@ doinput(const struct termios* origtty) {
 	tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
 	if (!qflg)
 		printf(_("Script done, file is %s\n"), fname);
-	done();
+	return done();
 }
 
 #include <sys/wait.h>
@@ -288,7 +287,7 @@ resize(int dummy __attribute__ ((__unused__))) {
 	(void) ioctl(master, TIOCSWINSZ, &win);
 }
 
-void
+static int
 dooutput() {
 	register ssize_t cc;
 	char obuf[BUFSIZ];
@@ -369,7 +368,7 @@ dooutput() {
 		fprintf(fscript, _("\nScript done on %s\n"), obuf);
 	}
 	fclose(fscript);
-	done();
+	return done();
 }
 
 static int
@@ -432,18 +431,18 @@ static void
 fail() {
 
 	(void) kill(0, SIGTERM);
-	done();
+	exit(done());
 }
 
-void
+static int
 done() {
 	if (eflg) {
 		if (WIFSIGNALED(childstatus))
-			exit(WTERMSIG(childstatus) + 0x80);
+			return WTERMSIG(childstatus) + 0x80;
 		else
-			exit(WEXITSTATUS(childstatus));
+			return WEXITSTATUS(childstatus);
 	}
-	exit(0);
+	return EX_OK;
 }
 
 void
