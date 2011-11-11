@@ -83,12 +83,10 @@ static void doinput(const struct termios* origtty);
 void dooutput(void);
 static int doshell(const struct termios* origtty);
 
-char	*shell;
-int	master = -1;
-int	child;
-int	subchild;
-int	childstatus;
-char	*fname;
+static int master = -1;
+static pid_t child;
+static int childstatus;
+static const char* fname;
 
 int	lb;
 int	l;
@@ -188,10 +186,6 @@ main(int argc, char **argv) {
 		die_if_link(fname);
 	}
 
-	shell = getenv("SHELL");
-	if (shell == NULL)
-		shell = _PATH_BSHELL;
-
 	getmaster();
 	if (!qflg)
 		printf(_("Script started, file is %s\n"), fname);
@@ -221,7 +215,7 @@ main(int argc, char **argv) {
 	if (child == 0) {
 
 		sigprocmask(SIG_SETMASK, &block_mask, NULL);
-		subchild = child = fork();
+		child = fork();
 		sigprocmask(SIG_SETMASK, &unblock_mask, NULL);
 
 		if (child < 0) {
@@ -266,6 +260,8 @@ doinput(const struct termios* origtty) {
 	}
 
 	tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
+	if (!qflg)
+		printf(_("Script done, file is %s\n"), fname);
 	done();
 }
 
@@ -396,7 +392,11 @@ doshell(const struct termios* origtty)
 
 	master = -1;
 
-	char* shname = strrchr(shell, '/');
+	const char* shell = getenv("SHELL");
+	if (shell == NULL)
+		shell = _PATH_BSHELL;
+
+	const char* shname = strrchr(shell, '/');
 	if (shname)
 		shname++;
 	else
@@ -437,16 +437,7 @@ fail() {
 
 void
 done() {
-	if (subchild) {
-		(void) close(master);
-
-		master = -1;
-	} else {
-		if (!qflg)
-			printf(_("Script done, file is %s\n"), fname);
-	}
-
-	if(eflg) {
+	if (eflg) {
 		if (WIFSIGNALED(childstatus))
 			exit(WTERMSIG(childstatus) + 0x80);
 		else
