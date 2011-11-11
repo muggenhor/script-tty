@@ -83,7 +83,6 @@ void dooutput(void);
 void doshell(void);
 
 char	*shell;
-FILE	*fscript;
 int	master = -1;
 int	slave;
 int	child;
@@ -190,10 +189,6 @@ main(int argc, char **argv) {
 		fname = "typescript";
 		die_if_link(fname);
 	}
-	if ((fscript = fopen(fname, aflg ? "a" : "w")) == NULL) {
-		perror(fname);
-		fail();
-	}
 
 	shell = getenv("SHELL");
 	if (shell == NULL)
@@ -251,7 +246,6 @@ doinput() {
 	char ibuf[BUFSIZ];
 
 	(void) close(1);
-	(void) fclose(fscript);
 
 	while (die == 0) {
 		if ((cc = read(0, ibuf, BUFSIZ)) > 0) {
@@ -316,6 +310,13 @@ dooutput() {
 
 	(void) close(0);
 	(void) close(slave);
+
+	FILE* const fscript = fopen(fname, aflg ? "a" : "w");
+	if (fscript == NULL) {
+		perror(fname);
+		fail();
+	}
+
 	tvec = time((time_t *)NULL);
 	my_strftime(obuf, sizeof obuf, "%c\n", localtime(&tvec));
 	fprintf(fscript, _("Script started on %s"), obuf);
@@ -367,6 +368,13 @@ dooutput() {
 
 	if (flgs)
 		fcntl(master, F_SETFL, flgs);
+	if (!qflg) {
+		char buf[BUFSIZ];
+		tvec = time((time_t *)NULL);
+		my_strftime(buf, sizeof buf, "%c\n", localtime(&tvec));
+		fprintf(fscript, _("\nScript done on %s"), buf);
+	}
+	fclose(fscript);
 	done();
 }
 
@@ -382,7 +390,6 @@ doshell() {
 
 	getslave();
 	(void) close(master);
-	(void) fclose(fscript);
 	(void) dup2(slave, 0);
 	(void) dup2(slave, 1);
 	(void) dup2(slave, 2);
@@ -430,16 +437,7 @@ fail() {
 
 void
 done() {
-	time_t tvec;
-
 	if (subchild) {
-		if (!qflg) {
-			char buf[BUFSIZ];
-			tvec = time((time_t *)NULL);
-			my_strftime(buf, sizeof buf, "%c\n", localtime(&tvec));
-			fprintf(fscript, _("\nScript done on %s"), buf);
-		}
-		(void) fclose(fscript);
 		(void) close(master);
 
 		master = -1;
