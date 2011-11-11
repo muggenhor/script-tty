@@ -288,22 +288,10 @@ resize(int dummy __attribute__ ((__unused__))) {
 	(void) ioctl(master, TIOCSWINSZ, &win);
 }
 
-/*
- * Stop extremely silly gcc complaint on %c:
- *  warning: `%c' yields only last 2 digits of year in some locales
- */
-static void
-my_strftime(char *buf, size_t len, const char *fmt, const struct tm *tm) {
-	strftime(buf, len, fmt, tm);
-}
-
 void
 dooutput() {
 	register ssize_t cc;
-	time_t tvec;
 	char obuf[BUFSIZ];
-	struct timeval tv;
-	double oldtime=time(NULL), newtime;
 	int flgs = 0;
 	ssize_t wrt;
 	ssize_t fwrt;
@@ -317,9 +305,12 @@ dooutput() {
 		fail();
 	}
 
-	tvec = time((time_t *)NULL);
-	my_strftime(obuf, sizeof obuf, "%c\n", localtime(&tvec));
-	fprintf(fscript, _("Script started on %s"), obuf);
+	struct timeval oldtime, newtime;
+	gettimeofday(&newtime, NULL);
+	oldtime = newtime;
+
+	strftime(obuf, sizeof(obuf), "%Y-%m-%d %H:%M:%S %Z", localtime(&newtime.tv_sec));
+	fprintf(fscript, _("Script started on %s\n"), obuf);
 
 	do {
 		if (die && flgs == 0) {
@@ -330,11 +321,11 @@ dooutput() {
 			if (fcntl(master, F_SETFL, (flgs | O_NONBLOCK)) == -1)
 				break;
 		}
-		if (tflg)
-			gettimeofday(&tv, NULL);
 
 		errno = 0;
 		cc = read(master, obuf, sizeof (obuf));
+		if (tflg)
+			gettimeofday(&newtime, NULL);
 
 		if (die && errno == EINTR && cc <= 0)
 			/* read() has been interrupted by SIGCHLD, try it again
@@ -344,8 +335,12 @@ dooutput() {
 		if (cc <= 0)
 			break;
 		if (tflg) {
-			newtime = tv.tv_sec + tv.tv_usec / 1000000.;
-			fprintf(stderr, "%020.16lf %zd\n", newtime - oldtime, cc);
+			const int usec_compensation = (newtime.tv_usec > oldtime.tv_usec) ? 0 : 1;
+			const struct timeval diff = {
+				.tv_sec  = newtime.tv_sec  - oldtime.tv_sec  - usec_compensation,
+				.tv_usec = newtime.tv_usec - oldtime.tv_usec + usec_compensation * 1000000L,
+			};
+			fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, cc);
 			oldtime = newtime;
 		}
 		wrt = write(1, obuf, cc);
@@ -369,10 +364,10 @@ dooutput() {
 	if (flgs)
 		fcntl(master, F_SETFL, flgs);
 	if (!qflg) {
-		char buf[BUFSIZ];
-		tvec = time((time_t *)NULL);
-		my_strftime(buf, sizeof buf, "%c\n", localtime(&tvec));
-		fprintf(fscript, _("\nScript done on %s"), buf);
+		if (!tflg)
+			gettimeofday(&newtime, NULL);
+		strftime(obuf, sizeof(obuf), "%Y-%m-%d %H:%M:%S %Z", localtime(&newtime.tv_sec));
+		fprintf(fscript, _("\nScript done on %s\n"), obuf);
 	}
 	fclose(fscript);
 	done();
