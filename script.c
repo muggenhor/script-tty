@@ -80,10 +80,10 @@ static void fail(void) __attribute__((__noreturn__));
 static void resize(int);
 static void fixtty(const struct termios*);
 static void getmaster(void);
-static int getslave(int master, const struct termios* origtty);
+static int getslave(const char* pts, const struct termios* origtty);
 static int doinput(const struct termios* origtty);
 static int dooutput(void);
-static int doshell(const struct termios* origtty);
+static int doshell(const char* pts, const struct termios* origtty);
 
 static int master = -1;
 static pid_t child;
@@ -189,6 +189,11 @@ main(int argc, char **argv) {
 	getmaster();
 	if (!qflg)
 		printf(_("Script started, file is %s\n"), fname);
+	const char* pts = ptsname(master);
+	if (!pts) {
+		perror("ptsname");
+		fail();
+	}
 
 	struct termios origtty;
 	tcgetattr(STDIN_FILENO, &origtty);
@@ -225,7 +230,10 @@ main(int argc, char **argv) {
 		if (child)
 			return dooutput();
 		else
-			return doshell(&origtty);
+		{
+			close(master);
+			return doshell(pts, &origtty);
+		}
 	}
 
 	sa.sa_handler = resize;
@@ -370,15 +378,17 @@ dooutput() {
 }
 
 static int
-doshell(const struct termios* origtty) {
-	const int slave = getslave(master, origtty);
-	close(master);
-	dup2(slave, 0);
-	dup2(slave, 1);
-	dup2(slave, 2);
-	close(slave);
+doshell(const char* pts, const struct termios* origtty) {
+	const int slave = getslave(pts, origtty);
+	dup2(slave, STDIN_FILENO);
+	dup2(slave, STDOUT_FILENO);
+	dup2(slave, STDERR_FILENO);
 
-	master = -1;
+	// Close slave filedescriptor only if it isn't one of the stdio descriptors
+	if (slave != STDIN_FILENO
+	 && slave != STDOUT_FILENO
+	 && slave != STDERR_FILENO)
+		close(slave);
 
 	const char* shell = getenv("SHELL");
 	if (shell == NULL)
@@ -445,15 +455,14 @@ getmaster() {
 }
 
 static int
-getslave(const int master, const struct termios* origtty) {
-	const char* name = ptsname(master);
-	const int slave = name ? open(name, O_RDWR) : -1;
+getslave(const char* pts, const struct termios* origtty) {
+	const int slave = open(pts, O_RDWR);
 
 	if (slave == -1
 	 || ioctl(slave, I_PUSH, "ptem") == -1   /* push ptem */
 	 || ioctl(slave, I_PUSH, "ldterm") == -1 /* push ldterm*/
 	 ) {
-		perror(name ? name : "ptsname");
+		perror(pts);
 		fail();
 	}
 
