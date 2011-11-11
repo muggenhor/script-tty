@@ -51,6 +51,7 @@
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <sys/file.h>
+#include <sys/wait.h>
 #include <signal.h>
 #include <errno.h>
 #include <string.h>
@@ -75,7 +76,7 @@
 
 static void finish(int);
 static int done(void);
-static void fail(void);
+static void fail(void) __attribute__((__noreturn__));
 static void resize(int);
 static void fixtty(const struct termios*);
 static void getmaster(void);
@@ -207,7 +208,7 @@ main(int argc, char **argv) {
 	child = fork();
 	sigprocmask(SIG_SETMASK, &unblock_mask, NULL);
 
-	if (child < 0) {
+	if (child == -1) {
 		perror("fork");
 		fail();
 	}
@@ -217,7 +218,7 @@ main(int argc, char **argv) {
 		child = fork();
 		sigprocmask(SIG_SETMASK, &unblock_mask, NULL);
 
-		if (child < 0) {
+		if (child == -1) {
 			perror("fork");
 			fail();
 		}
@@ -225,10 +226,10 @@ main(int argc, char **argv) {
 			return dooutput();
 		else
 			return doshell(&origtty);
-	} else {
-		sa.sa_handler = resize;
-		sigaction(SIGWINCH, &sa, NULL);
 	}
+
+	sa.sa_handler = resize;
+	sigaction(SIGWINCH, &sa, NULL);
 
 	return doinput(&origtty);
 }
@@ -238,7 +239,7 @@ doinput(const struct termios* origtty) {
 	register int cc;
 	char ibuf[BUFSIZ];
 
-	(void) close(1);
+	close(1);
 
 	while (!die) {
 		if ((cc = read(0, ibuf, BUFSIZ)) > 0) {
@@ -263,8 +264,6 @@ doinput(const struct termios* origtty) {
 	return done();
 }
 
-#include <sys/wait.h>
-
 static void
 finish(int dummy __attribute__ ((__unused__))) {
 	int status;
@@ -282,8 +281,8 @@ resize(int dummy __attribute__ ((__unused__))) {
 	resized = true;
 	/* transmit window change information to the child */
 	struct winsize win;
-	(void) ioctl(0, TIOCGWINSZ, &win);
-	(void) ioctl(master, TIOCSWINSZ, &win);
+	ioctl(0, TIOCGWINSZ, &win);
+	ioctl(master, TIOCSWINSZ, &win);
 }
 
 static int
@@ -294,7 +293,7 @@ dooutput() {
 	ssize_t wrt;
 	ssize_t fwrt;
 
-	(void) close(0);
+	close(0);
 
 	FILE* const fscript = fopen(fname, aflg ? "a" : "w");
 	if (fscript == NULL) {
@@ -355,7 +354,7 @@ dooutput() {
 			fail();
 		}
 		if (fflg)
-			(void) fflush(fscript);
+			fflush(fscript);
 	} while(1);
 
 	if (flgs)
@@ -371,22 +370,13 @@ dooutput() {
 }
 
 static int
-doshell(const struct termios* origtty)
-{
-#if 0
-	int t = open(_PATH_DEV_TTY, O_RDWR);
-	if (t >= 0) {
-		(void) ioctl(t, TIOCNOTTY, (char *)0);
-		(void) close(t);
-	}
-#endif
-
+doshell(const struct termios* origtty) {
 	const int slave = getslave(master, origtty);
-	(void) close(master);
-	(void) dup2(slave, 0);
-	(void) dup2(slave, 1);
-	(void) dup2(slave, 2);
-	(void) close(slave);
+	close(master);
+	dup2(slave, 0);
+	dup2(slave, 1);
+	dup2(slave, 2);
+	close(slave);
 
 	master = -1;
 
@@ -407,8 +397,6 @@ doshell(const struct termios* origtty)
 
 	perror(shell);
 	fail();
-
-	return EX_OSERR;
 }
 
 static void
@@ -423,13 +411,12 @@ fixtty(const struct termios* origtty) {
 	rtt.c_cflag |= CS8;
 	rtt.c_cc[VMIN] = 1; /* read returns when one char is available.  */
 	rtt.c_cc[VTIME] = 0;
-	(void) tcsetattr(0, TCSANOW, &rtt);
+	tcsetattr(0, TCSANOW, &rtt);
 }
 
 static void
 fail() {
-
-	(void) kill(0, SIGTERM);
+	kill(0, SIGTERM);
 	exit(done());
 }
 
@@ -473,8 +460,8 @@ getslave(const int master, const struct termios* origtty) {
 	// Copy tty-settings from parent terminal to client terminal
 	tcsetattr(slave, TCSANOW, origtty);
 
-	(void) setsid();
-	(void) ioctl(slave, TIOCSCTTY, 0);
+	setsid();
+	ioctl(slave, TIOCSCTTY, 0);
 
 	return slave;
 }
