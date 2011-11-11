@@ -41,6 +41,7 @@
 /*
  * script
  */
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -72,12 +73,12 @@
 # define _PATH_BSHELL "/home/gschijnd/usr/bin/zsh"
 #endif
 
-void finish(int);
+static void finish(int);
 static int done(void);
 static void fail(void);
-void resize(int);
+static void resize(int);
 static void fixtty(const struct termios*);
-void getmaster(void);
+static void getmaster(void);
 static int getslave(int master, const struct termios* origtty);
 static int doinput(const struct termios* origtty);
 static int dooutput(void);
@@ -88,22 +89,20 @@ static pid_t child;
 static int childstatus;
 static const char* fname;
 
-int	lb;
-int	l;
-int	aflg = 0;
-char	*cflg = NULL;
-int	eflg = 0;
-int	fflg = 0;
-int	qflg = 0;
-int	tflg = 0;
+static int aflg = 0;
+static const char* cflg = NULL;
+static int eflg = 0;
+static int fflg = 0;
+static int qflg = 0;
+static int tflg = 0;
 
-static char *progname;
+static const char* progname;
 
-int die;
-int resized;
+static volatile bool die;
+static volatile bool resized;
 
 static void
-die_if_link(const char *fn) {
+die_if_link(const char* fn) {
 	struct stat s;
 
 	if (lstat(fn, &s) == 0 && (S_ISLNK(s.st_mode) || s.st_nlink > 1)) {
@@ -131,7 +130,7 @@ main(int argc, char **argv) {
 	sigset_t block_mask, unblock_mask;
 	struct sigaction sa;
 	extern int optind;
-	char *p;
+	const char* p;
 	int ch;
 
 	progname = argv[0];
@@ -241,7 +240,7 @@ doinput(const struct termios* origtty) {
 
 	(void) close(1);
 
-	while (die == 0) {
+	while (!die) {
 		if ((cc = read(0, ibuf, BUFSIZ)) > 0) {
 			ssize_t wrt = write(master, ibuf, cc);
 			if (wrt == -1) {
@@ -253,7 +252,7 @@ doinput(const struct termios* origtty) {
 			}
 		}
 		else if (cc == -1 && errno == EINTR && resized)
-			resized = 0;
+			resized = false;
 		else
 			break;
 	}
@@ -266,7 +265,7 @@ doinput(const struct termios* origtty) {
 
 #include <sys/wait.h>
 
-void
+static void
 finish(int dummy __attribute__ ((__unused__))) {
 	int status;
 	register int pid;
@@ -274,13 +273,13 @@ finish(int dummy __attribute__ ((__unused__))) {
 	while ((pid = wait3(&status, WNOHANG, 0)) > 0)
 		if (pid == child) {
 			childstatus = status;
-			die = 1;
+			die = true;
 		}
 }
 
-void
+static void
 resize(int dummy __attribute__ ((__unused__))) {
-	resized = 1;
+	resized = true;
 	/* transmit window change information to the child */
 	struct winsize win;
 	(void) ioctl(0, TIOCGWINSZ, &win);
@@ -445,7 +444,7 @@ done() {
 	return EX_OK;
 }
 
-void
+static void
 getmaster() {
 	master = open("/dev/ptmx", O_RDWR);
 	if (master == -1
