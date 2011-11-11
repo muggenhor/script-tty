@@ -77,21 +77,19 @@ void fail(void);
 void resize(int);
 void fixtty(void);
 void getmaster(void);
-void getslave(void);
+static int getslave(int master, const struct termios* origtty);
 void doinput(void);
 void dooutput(void);
 void doshell(void);
 
 char	*shell;
 int	master = -1;
-int	slave;
 int	child;
 int	subchild;
 int	childstatus;
 char	*fname;
 
 struct	termios tt;
-struct	winsize win;
 int	lb;
 int	l;
 int	aflg = 0;
@@ -284,6 +282,7 @@ void
 resize(int dummy __attribute__ ((__unused__))) {
 	resized = 1;
 	/* transmit window change information to the child */
+	struct winsize win;
 	(void) ioctl(0, TIOCGWINSZ, &win);
 	(void) ioctl(master, TIOCSWINSZ, &win);
 }
@@ -297,7 +296,6 @@ dooutput() {
 	ssize_t fwrt;
 
 	(void) close(0);
-	(void) close(slave);
 
 	FILE* const fscript = fopen(fname, aflg ? "a" : "w");
 	if (fscript == NULL) {
@@ -383,7 +381,7 @@ doshell() {
 	}
 #endif
 
-	getslave();
+	const int slave = getslave(master, &tt);
 	(void) close(master);
 	(void) dup2(slave, 0);
 	(void) dup2(slave, 1);
@@ -454,26 +452,35 @@ done() {
 void
 getmaster() {
 	(void) tcgetattr(0, &tt);
-	(void) ioctl(0, TIOCGWINSZ, &win);
 	master = open("/dev/ptmx", O_RDWR);
-	if (master  < 0) {
+	if (master == -1
+	 || grantpt(master) == -1
+	 || unlockpt(master) == -1) {
 		fprintf(stderr, _("opening a pty using /dev/ptmx failed\n"));
 		fail();
 	}
+
+	resize(0);
 }
 
-void
-getslave() {
-	if (grantpt(master) == -1
-	 || unlockpt(master) == -1
-	 || (slave = open(ptsname(master), O_RDWR)) == -1
-	 || ioctl(slave, I_PUSH, "ptem") == -1      /* push ptem */
-	 || ioctl(slave, I_PUSH, "ldterm") == -1) { /* push ldterm*/
-		perror(ptsname(master));
+static int
+getslave(const int master, const struct termios* origtty) {
+	const char* name = ptsname(master);
+	const int slave = name ? open(name, O_RDWR) : -1;
+
+	if (slave == -1
+	 || ioctl(slave, I_PUSH, "ptem") == -1   /* push ptem */
+	 || ioctl(slave, I_PUSH, "ldterm") == -1 /* push ldterm*/
+	 ) {
+		perror(name ? name : "ptsname");
 		fail();
 	}
-	(void) tcsetattr(slave, TCSANOW, &tt);
-	(void) ioctl(slave, TIOCSWINSZ, &win);
+
+	// Copy tty-settings from parent terminal to client terminal
+	tcsetattr(slave, TCSANOW, origtty);
+
 	(void) setsid();
 	(void) ioctl(slave, TIOCSCTTY, 0);
+
+	return slave;
 }
