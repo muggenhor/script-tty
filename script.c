@@ -295,7 +295,7 @@ dooutput() {
 
 	close(0);
 
-	FILE* const fscript = fopen(fname, aflg ? "a" : "w");
+	FILE* const fscript = fopen(fname, aflg ? "ab" : "wb");
 	if (fscript == NULL) {
 		perror(fname);
 		fail();
