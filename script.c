@@ -246,6 +246,7 @@ doio(const struct termios* origtty, const int pty) {
 	size_t ptyoutpending = 0,
 	       stdoutpending = 0,
 	       scriptpending = 0;
+	static const size_t delay_spec_size  = sizeof("\x1B_D;18446744073709551615.999999\x1B\\") - 1;
 	static const size_t resize_spec_size = sizeof("\x1B[8;65535;65535t") - 1;
 
 	const int scriptfd = open(fname, O_WRONLY | O_CREAT | (aflg ? O_APPEND : O_TRUNC)
@@ -293,7 +294,7 @@ doio(const struct termios* origtty, const int pty) {
 		if (script_open && scriptpending)
 			FD_SET(scriptfd, &wfds);
 
-		if (ptyin_open && MAX(stdoutpending, scriptpending) < MIN(sizeof(stdoutbuf), sizeof(scriptbuf)))
+		if (ptyin_open && MAX(stdoutpending, scriptpending + delay_spec_size) < MIN(sizeof(stdoutbuf), sizeof(scriptbuf)))
 			FD_SET(pty, &rfds);
 		if (ptyout_open && ptyoutpending)
 			FD_SET(pty, &wfds);
@@ -311,8 +312,7 @@ doio(const struct termios* origtty, const int pty) {
 			goto restoretty;
 		}
 
-		if (tflg)
-			gettimeofday(&newtime, NULL);
+		gettimeofday(&newtime, NULL);
 
 		// Send data down the pseudo terminal first
 		if (ptyoutpending && FD_ISSET(pty, &wfds))
@@ -398,23 +398,11 @@ doio(const struct termios* origtty, const int pty) {
 
 			if (!scriptpending && !ptyin_open && !qflg)
 			{
-				if (!tflg)
-					gettimeofday(&newtime, NULL);
-
 				char tbuf[256];
 				if (strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S %Z\n", gmtime(&newtime.tv_sec)))
 					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), _("\r\nScript done on %s\r\n"), tbuf);
 				else
 					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), "%s", _("\r\nScript done\r\n"));
-				if (tflg) {
-					const int usec_compensation = (newtime.tv_usec > oldtime.tv_usec) ? 0 : 1;
-					const struct timeval diff = {
-						.tv_sec  = newtime.tv_sec  - oldtime.tv_sec  - usec_compensation,
-						.tv_usec = newtime.tv_usec - oldtime.tv_usec + usec_compensation * 1000000L,
-					};
-					fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, scriptpending);
-					oldtime = newtime;
-				}
 			}
 		}
 
@@ -451,9 +439,9 @@ doio(const struct termios* origtty, const int pty) {
 		}
 
 		// Fetch data from the pseudo terminal first
-		if (MAX(stdoutpending, scriptpending) < MIN(sizeof(stdoutbuf), sizeof(scriptbuf)) && FD_ISSET(pty, &rfds))
+		if (MAX(stdoutpending, scriptpending + delay_spec_size) < MIN(sizeof(stdoutbuf), sizeof(scriptbuf)) && FD_ISSET(pty, &rfds))
 		{
-			ssize_t ret = read(pty, stdoutbuf + stdoutpending, MIN(sizeof(stdoutbuf), sizeof(scriptbuf)) - MAX(stdoutpending, scriptpending));
+			ssize_t ret = read(pty, stdoutbuf + stdoutpending, MIN(sizeof(stdoutbuf), sizeof(scriptbuf)) - MAX(stdoutpending, scriptpending + delay_spec_size));
 			if (ret == -1)
 			{
 				switch (errno)
@@ -475,20 +463,27 @@ doio(const struct termios* origtty, const int pty) {
 			}
 			else
 			{
+				const int usec_compensation = (newtime.tv_usec > oldtime.tv_usec) ? 0 : 1;
+				const struct timeval diff = {
+					.tv_sec  = newtime.tv_sec  - oldtime.tv_sec  - usec_compensation,
+					.tv_usec = newtime.tv_usec - oldtime.tv_usec + usec_compensation * 1000000L,
+				};
+				oldtime = newtime;
+
+				// Use Application Program-Control code to add delay-command scriptreplay can use
+				const int len = snprintf(scriptbuf + scriptpending, sizeof(scriptbuf) - scriptpending,
+						"\x1B_D;%lld.%06ld\x1B\\", (long long)diff.tv_sec, (long)diff.tv_usec);
+				if (len >= 0 && len < sizeof(scriptbuf) - scriptpending)
+					scriptpending += len;
+
+				if (tflg) {
+					fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, ret);
+				}
+
 				// Make sure the data is available in the scriptbuf as well
 				memcpy(scriptbuf + scriptpending, stdoutbuf + stdoutpending, ret);
 				stdoutpending += ret;
 				scriptpending += ret;
-
-				if (tflg) {
-					const int usec_compensation = (newtime.tv_usec > oldtime.tv_usec) ? 0 : 1;
-					const struct timeval diff = {
-						.tv_sec  = newtime.tv_sec  - oldtime.tv_sec  - usec_compensation,
-						.tv_usec = newtime.tv_usec - oldtime.tv_usec + usec_compensation * 1000000L,
-					};
-					fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, ret);
-					oldtime = newtime;
-				}
 			}
 		}
 
