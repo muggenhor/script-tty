@@ -278,48 +278,6 @@ doio(const struct termios* origtty, const int pty) {
 	while (stdin_open || (ptyout_open && ptyoutpending)
 	    || ptyin_open || (stdout_open && stdoutpending) || (script_open && scriptpending))
 	{
-		// Close all unused endpoints & file descriptors
-
-		// Close our output channels when the other input channels are closed (i.e. they're won't be any new data to send
-		if (stdout_open && !stdoutpending && !ptyin_open)
-		{
-			if (!stdin_open)
-				tcsetattr(STDOUT_FILENO, TCSADRAIN, origtty);
-			close(STDOUT_FILENO);
-			stdout_open = false;
-			continue;
-		}
-		if (script_open && !scriptpending && !ptyin_open)
-		{
-			close(scriptfd);
-			script_open = false;
-			continue;
-		}
-		if (ptyout_open && ((!ptyoutpending && !stdin_open) || die))
-		{
-			ptyout_open = false;
-			if (!ptyin_open)
-				close(pty);
-			continue;
-		}
-
-		// Close our input channels when the respective output channels are closed
-		if (stdin_open && (!ptyout_open || die))
-		{
-			if (!stdout_open)
-				tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
-			close(STDIN_FILENO);
-			stdin_open = false;
-			continue;
-		}
-		if (ptyin_open && !stdout_open)
-		{
-			ptyin_open = false;
-			if (!ptyout_open)
-				close(pty);
-			continue;
-		}
-
 		fd_set rfds, wfds;
 		FD_ZERO(&rfds);
 		FD_ZERO(&wfds);
@@ -520,6 +478,52 @@ doio(const struct termios* origtty, const int pty) {
 			{
 				ptyoutpending += ret;
 			}
+		}
+
+		// Close all unused endpoints & file descriptors
+		for (;;)
+		{
+			// Close our output channels when the other input channels are closed (i.e. they're won't be any new data to send
+			if (stdout_open && !stdoutpending && !ptyin_open)
+			{
+				if (!stdin_open)
+					tcsetattr(STDOUT_FILENO, TCSADRAIN, origtty);
+				close(STDOUT_FILENO);
+				stdout_open = false;
+				continue;
+			}
+			if (script_open && !scriptpending && !ptyin_open)
+			{
+				close(scriptfd);
+				script_open = false;
+				continue;
+			}
+			if (ptyout_open && !ptyoutpending && !stdin_open)
+			{
+				ptyout_open = false;
+				if (!ptyin_open)
+					close(pty);
+				continue;
+			}
+
+			// Close our input channels when the respective output channels are closed
+			if (stdin_open && (!ptyout_open || die))
+			{
+				if (!stdout_open)
+					tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
+				close(STDIN_FILENO);
+				stdin_open = false;
+				continue;
+			}
+			if (ptyin_open && !stdout_open)
+			{
+				ptyin_open = false;
+				if (!ptyout_open)
+					close(pty);
+				continue;
+			}
+
+			break;
 		}
 	}
 
