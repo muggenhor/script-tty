@@ -74,15 +74,15 @@
 # define _PATH_BSHELL "/home/gschijnd/usr/bin/zsh"
 #endif
 
+#define BUFSIZE (65536UL)
+
 static void finish(int);
-static int done(void);
 static void fail(void) __attribute__((__noreturn__));
 static void resize(int);
 static void fixtty(const struct termios*);
 static void getmaster(void);
 static int getslave(const char* pts, const struct termios* origtty);
-static int doinput(const struct termios* origtty);
-static int dooutput(void);
+static int doio(const struct termios* origtty, const int pty);
 static int doshell(const char* pts, const struct termios* origtty);
 
 static int master = -1;
@@ -100,7 +100,6 @@ static int tflg = 0;
 static const char* progname;
 
 static volatile bool die;
-static volatile bool resized;
 
 static void
 die_if_link(const char* fn) {
@@ -129,7 +128,6 @@ die_if_link(const char* fn) {
 int
 main(int argc, char **argv) {
 	sigset_t block_mask, unblock_mask;
-	struct sigaction sa;
 	extern int optind;
 	const char* p;
 	int ch;
@@ -197,13 +195,6 @@ main(int argc, char **argv) {
 
 	struct termios origtty;
 	tcgetattr(STDIN_FILENO, &origtty);
-	fixtty(&origtty);
-
-	/* setup SIGCHLD handler */
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	sa.sa_handler = finish;
-	sigaction(SIGCHLD, &sa, NULL);
 
 	/* init mask for SIGCHLD */
 	sigprocmask(SIG_SETMASK, NULL, &block_mask);
@@ -218,64 +209,343 @@ main(int argc, char **argv) {
 		fail();
 	}
 	if (child == 0) {
-
-		sigprocmask(SIG_SETMASK, &block_mask, NULL);
-		child = fork();
-		sigprocmask(SIG_SETMASK, &unblock_mask, NULL);
-
-		if (child == -1) {
-			perror("fork");
-			fail();
-		}
-		if (child)
-			return dooutput();
-		else
-		{
-			close(master);
-			return doshell(pts, &origtty);
-		}
+		close(master);
+		return doshell(pts, &origtty);
 	}
 
+	/* setup SIGCHLD handler */
+	struct sigaction sa;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sa.sa_handler = finish;
+	sigaction(SIGCHLD, &sa, NULL);
+
+	/* SIGWINCH handler */
 	sa.sa_handler = resize;
 	sigaction(SIGWINCH, &sa, NULL);
 
-	return doinput(&origtty);
+	return doio(&origtty, master);
 }
 
+#define MAX(a,b) ((a) < (b) ? (b) : (a))
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+
 static int
-doinput(const struct termios* origtty) {
-	register int cc;
-	char ibuf[BUFSIZ];
+doio(const struct termios* origtty, const int pty) {
+	bool stdin_open  = true,
+	     stdout_open = true,
+	     script_open = true,
+	     ptyin_open  = true,
+	     ptyout_open = true;
+	char ptyoutbuf[BUFSIZE],
+	     stdoutbuf[BUFSIZE],
+	     scriptbuf[BUFSIZE];
+	size_t ptyoutpending = 0,
+	       stdoutpending = 0,
+	       scriptpending = 0;
 
-	close(1);
-
-	while (!die) {
-		if ((cc = read(0, ibuf, BUFSIZ)) > 0) {
-			ssize_t wrt = write(master, ibuf, cc);
-			if (wrt == -1) {
-				int err = errno;
-				fprintf (stderr, _("%s: write error %d: %s\n"),
-					progname, err, strerror(err));
-				tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
-				fail();
-			}
-		}
-		else if (cc == -1 && errno == EINTR && resized)
-			resized = false;
-		else
-			break;
+	const int scriptfd = open(fname, O_WRONLY | O_CREAT | (aflg ? O_APPEND : O_TRUNC)
+			/* Flush data after each write when requested. */
+#if O_DSYNC
+			| (fflg ? O_DSYNC : 0)
+#elif O_SYNC
+			| (fflg ? O_SYNC : 0)
+#elif O_FSYNC
+			| (fflg ? O_FSYNC : 0)
+#endif
+			, 0666);
+	if (scriptfd == -1) {
+		perror(fname);
+		fail();
 	}
 
-	tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
-	if (!qflg)
-		printf(_("Script done, file is %s\n"), fname);
-	return done();
+	struct timeval oldtime, newtime;
+	gettimeofday(&newtime, NULL);
+	oldtime = newtime;
+	{
+		char tbuf[256];
+		if (strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S %Z\n", gmtime(&newtime.tv_sec)))
+			scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), _("Script started on %s\r\n"), tbuf);
+		else
+			scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), "%s", _("Script started\r\n"));
+	}
+
+	const int nfds = MAX(STDIN_FILENO, MAX(STDOUT_FILENO, MAX(pty, scriptfd))) + 1;
+
+	fixtty(origtty);
+	int exitcode = EX_OK;
+
+	while (stdin_open || (ptyout_open && ptyoutpending)
+	    || ptyin_open || (stdout_open && stdoutpending) || (script_open && scriptpending))
+	{
+		// Close all unused endpoints & file descriptors
+
+		// Close our output channels when the other input channels are closed (i.e. they're won't be any new data to send
+		if (stdout_open && !stdoutpending && !ptyin_open)
+		{
+			if (!stdin_open)
+				tcsetattr(STDOUT_FILENO, TCSADRAIN, origtty);
+			close(STDOUT_FILENO);
+			stdout_open = false;
+			continue;
+		}
+		if (script_open && !scriptpending && !ptyin_open)
+		{
+			close(scriptfd);
+			script_open = false;
+			continue;
+		}
+		if (ptyout_open && ((!ptyoutpending && !stdin_open) || die))
+		{
+			ptyout_open = false;
+			if (!ptyin_open)
+				close(pty);
+			continue;
+		}
+
+		// Close our input channels when the respective output channels are closed
+		if (stdin_open && (!ptyout_open || die))
+		{
+			if (!stdout_open)
+				tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
+			close(STDIN_FILENO);
+			stdin_open = false;
+			continue;
+		}
+		if (ptyin_open && !stdout_open)
+		{
+			ptyin_open = false;
+			if (!ptyout_open)
+				close(pty);
+			continue;
+		}
+
+		fd_set rfds, wfds;
+		FD_ZERO(&rfds);
+		FD_ZERO(&wfds);
+
+		if (stdin_open && ptyoutpending < sizeof(ptyoutbuf))
+			FD_SET(STDIN_FILENO, &rfds);
+		if (stdout_open && stdoutpending)
+			FD_SET(STDOUT_FILENO, &wfds);
+		if (script_open && scriptpending)
+			FD_SET(scriptfd, &wfds);
+
+		if (ptyin_open && MAX(stdoutpending, scriptpending) < MIN(sizeof(stdoutbuf), sizeof(scriptbuf)))
+			FD_SET(pty, &rfds);
+		if (ptyout_open && ptyoutpending)
+			FD_SET(pty, &wfds);
+
+		const int ret = select(nfds, &rfds, &wfds, NULL, NULL);
+		if (ret == -1)
+		{
+			if (errno == EINTR)
+				continue;
+			perror("select");
+			exitcode = EX_OSERR;
+			goto restoretty;
+		}
+
+		if (tflg)
+			gettimeofday(&newtime, NULL);
+
+		// Send data down the pseudo terminal first
+		if (ptyoutpending && FD_ISSET(pty, &wfds))
+		{
+			ssize_t ret = write(pty, ptyoutbuf, ptyoutpending);
+			if (ret == -1)
+			{
+				switch (errno)
+				{
+					case EINTR:
+						break;
+					case ECONNRESET:
+					case EPIPE:
+						ptyout_open = false;
+						break;
+					default:
+						perror("write(pty)");
+						exitcode = EX_IOERR;
+						goto restoretty;
+				}
+			}
+			else
+			{
+				ptyoutpending -= ret;
+				memmove(ptyoutbuf, ptyoutbuf + ret, ptyoutpending);
+			}
+		}
+
+		// Send data down stdout next
+		if (stdoutpending && FD_ISSET(STDOUT_FILENO, &wfds))
+		{
+			ssize_t ret = write(STDOUT_FILENO, stdoutbuf, stdoutpending);
+			if (ret == -1)
+			{
+				switch (errno)
+				{
+					case EINTR:
+						break;
+					case ECONNRESET:
+					case EPIPE:
+						close(STDOUT_FILENO);
+						stdout_open = false;
+						break;
+					default:
+						perror("write");
+						exitcode = EX_IOERR;
+						goto restoretty;
+				}
+			}
+			else
+			{
+				stdoutpending -= ret;
+				memmove(stdoutbuf, stdoutbuf + ret, stdoutpending);
+			}
+		}
+
+		// Send data down typescript next
+		if (scriptpending && FD_ISSET(scriptfd, &wfds))
+		{
+			ssize_t ret = write(scriptfd, scriptbuf, scriptpending);
+			if (ret == -1)
+			{
+				switch (errno)
+				{
+					case EINTR:
+						break;
+					case ECONNRESET:
+					case EPIPE:
+						close(scriptfd);
+						script_open = false;
+						break;
+					default:
+						perror("write");
+						exitcode = EX_IOERR;
+						goto restoretty;
+				}
+			}
+			else
+			{
+				scriptpending -= ret;
+				memmove(scriptbuf, scriptbuf + ret, scriptpending);
+			}
+
+			if (!scriptpending && !ptyin_open && !qflg)
+			{
+				if (!tflg)
+					gettimeofday(&newtime, NULL);
+
+				char tbuf[256];
+				if (strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S %Z\n", gmtime(&newtime.tv_sec)))
+					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), _("\r\nScript done on %s\r\n"), tbuf);
+				else
+					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), "%s", _("\r\nScript done\r\n"));
+				if (tflg) {
+					const int usec_compensation = (newtime.tv_usec > oldtime.tv_usec) ? 0 : 1;
+					const struct timeval diff = {
+						.tv_sec  = newtime.tv_sec  - oldtime.tv_sec  - usec_compensation,
+						.tv_usec = newtime.tv_usec - oldtime.tv_usec + usec_compensation * 1000000L,
+					};
+					fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, scriptpending);
+					oldtime = newtime;
+				}
+			}
+		}
+
+		// Fetch data from the pseudo terminal first
+		if (MAX(stdoutpending, scriptpending) < MIN(sizeof(stdoutbuf), sizeof(scriptbuf)) && FD_ISSET(pty, &rfds))
+		{
+			ssize_t ret = read(pty, stdoutbuf + stdoutpending, MIN(sizeof(stdoutbuf), sizeof(scriptbuf)) - MAX(stdoutpending, scriptpending));
+			if (ret == -1)
+			{
+				switch (errno)
+				{
+					case EIO:
+						ptyin_open = false;
+						break;
+					case EINTR:
+						break;
+					default:
+						perror("read(pty)");
+						exitcode = EX_IOERR;
+						goto restoretty;
+				}
+			}
+			else if (ret == 0)
+			{
+				ptyin_open = false;
+			}
+			else
+			{
+				// Make sure the data is available in the scriptbuf as well
+				memcpy(scriptbuf + scriptpending, stdoutbuf + stdoutpending, ret);
+				stdoutpending += ret;
+				scriptpending += ret;
+
+				if (tflg) {
+					const int usec_compensation = (newtime.tv_usec > oldtime.tv_usec) ? 0 : 1;
+					const struct timeval diff = {
+						.tv_sec  = newtime.tv_sec  - oldtime.tv_sec  - usec_compensation,
+						.tv_usec = newtime.tv_usec - oldtime.tv_usec + usec_compensation * 1000000L,
+					};
+					fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, ret);
+					oldtime = newtime;
+				}
+			}
+		}
+
+		// Fetch data from stdin next
+		if (ptyoutpending < sizeof(ptyoutbuf) && FD_ISSET(STDIN_FILENO, &rfds))
+		{
+			ssize_t ret = read(STDIN_FILENO, ptyoutbuf + ptyoutpending, sizeof(ptyoutbuf) - ptyoutpending);
+			if (ret == -1)
+			{
+				switch (errno)
+				{
+					case EINTR:
+						break;
+					default:
+						perror("read");
+						exitcode = EX_IOERR;
+						goto restoretty;
+				}
+			}
+			else if (ret == 0)
+			{
+				close(STDIN_FILENO);
+				stdin_open = false;
+			}
+			else
+			{
+				ptyoutpending += ret;
+			}
+		}
+	}
+
+	if (eflg) {
+		if (WIFSIGNALED(childstatus))
+			exitcode = WTERMSIG(childstatus) + 0x80;
+		else
+			exitcode = WEXITSTATUS(childstatus);
+	} else {
+		exitcode = EX_OK;
+	}
+
+restoretty:
+	// Restore terminal settings
+	if      (stdin_open)
+		tcsetattr(STDIN_FILENO, TCSADRAIN, origtty);
+	else if (stdout_open)
+		tcsetattr(STDOUT_FILENO, TCSADRAIN, origtty);
+
+	return exitcode;
 }
 
 static void
 finish(int dummy __attribute__ ((__unused__))) {
 	int status;
-	register int pid;
+	pid_t pid;
 
 	while ((pid = wait3(&status, WNOHANG, 0)) > 0)
 		if (pid == child) {
@@ -286,95 +556,10 @@ finish(int dummy __attribute__ ((__unused__))) {
 
 static void
 resize(int dummy __attribute__ ((__unused__))) {
-	resized = true;
 	/* transmit window change information to the child */
 	struct winsize win;
 	ioctl(0, TIOCGWINSZ, &win);
 	ioctl(master, TIOCSWINSZ, &win);
-}
-
-static int
-dooutput() {
-	register ssize_t cc;
-	char obuf[BUFSIZ];
-	int flgs = 0;
-	ssize_t wrt;
-	ssize_t fwrt;
-
-	close(0);
-
-	FILE* const fscript = fopen(fname, aflg ? "ab" : "wb");
-	if (fscript == NULL) {
-		perror(fname);
-		fail();
-	}
-
-	struct timeval oldtime, newtime;
-	gettimeofday(&newtime, NULL);
-	oldtime = newtime;
-
-	strftime(obuf, sizeof(obuf), "%Y-%m-%d %H:%M:%S %Z", localtime(&newtime.tv_sec));
-	fprintf(fscript, _("Script started on %s\n"), obuf);
-
-	do {
-		if (die && flgs == 0) {
-			/* ..child is dead, but it doesn't mean that there is
-			 * nothing in buffers.
-			 */
-			flgs = fcntl(master, F_GETFL, 0);
-			if (fcntl(master, F_SETFL, (flgs | O_NONBLOCK)) == -1)
-				break;
-		}
-
-		errno = 0;
-		cc = read(master, obuf, sizeof (obuf));
-		if (tflg)
-			gettimeofday(&newtime, NULL);
-
-		if (die && errno == EINTR && cc <= 0)
-			/* read() has been interrupted by SIGCHLD, try it again
-			 * with O_NONBLOCK
-			 */
-			continue;
-		if (cc <= 0)
-			break;
-		if (tflg) {
-			const int usec_compensation = (newtime.tv_usec > oldtime.tv_usec) ? 0 : 1;
-			const struct timeval diff = {
-				.tv_sec  = newtime.tv_sec  - oldtime.tv_sec  - usec_compensation,
-				.tv_usec = newtime.tv_usec - oldtime.tv_usec + usec_compensation * 1000000L,
-			};
-			fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, cc);
-			oldtime = newtime;
-		}
-		wrt = write(1, obuf, cc);
-		if (wrt < 0) {
-			int err = errno;
-			fprintf (stderr, _("%s: write error: %s\n"),
-				progname, strerror(err));
-			fail();
-		}
-		fwrt = fwrite(obuf, 1, cc, fscript);
-		if (fwrt < cc) {
-			int err = errno;
-			fprintf (stderr, _("%s: cannot write script file, error: %s\n"),
-				progname, strerror(err));
-			fail();
-		}
-		if (fflg)
-			fflush(fscript);
-	} while(1);
-
-	if (flgs)
-		fcntl(master, F_SETFL, flgs);
-	if (!qflg) {
-		if (!tflg)
-			gettimeofday(&newtime, NULL);
-		strftime(obuf, sizeof(obuf), "%Y-%m-%d %H:%M:%S %Z", localtime(&newtime.tv_sec));
-		fprintf(fscript, _("\nScript done on %s\n"), obuf);
-	}
-	fclose(fscript);
-	return done();
 }
 
 static int
@@ -427,18 +612,10 @@ fixtty(const struct termios* origtty) {
 static void
 fail() {
 	kill(0, SIGTERM);
-	exit(done());
-}
-
-static int
-done() {
-	if (eflg) {
-		if (WIFSIGNALED(childstatus))
-			return WTERMSIG(childstatus) + 0x80;
-		else
-			return WEXITSTATUS(childstatus);
-	}
-	return EX_OK;
+	/* Shut up the compiler which thinks we'll get here (and thus return
+	 * from a noreturn function). */
+	for (;;)
+		pause();
 }
 
 static void
