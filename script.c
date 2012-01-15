@@ -471,13 +471,15 @@ doio(const struct termios* origtty, const int pty) {
 				oldtime = newtime;
 
 				// Use Application Program-Control code to add delay-command scriptreplay can use
-				const int len = snprintf(scriptbuf + scriptpending, sizeof(scriptbuf) - scriptpending,
+				int len = snprintf(scriptbuf + scriptpending, sizeof(scriptbuf) - scriptpending,
 						"\x1B_D;%lld.%06ld\x1B\\", (long long)diff.tv_sec, (long)diff.tv_usec);
 				if (len >= 0 && len < sizeof(scriptbuf) - scriptpending)
 					scriptpending += len;
+				else
+					len = 0;
 
 				if (tflg) {
-					fprintf(stderr, "%03lld.%06ld %zd\n", (long long)diff.tv_sec, (long)diff.tv_usec, ret);
+					fprintf(stderr, "%03lld.%06ld %zu\n", (long long)diff.tv_sec, (long)diff.tv_usec, ret + len);
 				}
 
 				// Make sure the data is available in the scriptbuf as well
