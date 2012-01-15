@@ -11,10 +11,10 @@ clean:
 	$(RM) $(bin_PROGRAMS)
 
 script: script.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 scriptreplay: scriptreplay.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 install-bin: $(bin_PROGRAMS) reset
 	$(INSTALL) -m 755 -d $(DESTDIR)$(PREFIX)/bin/
