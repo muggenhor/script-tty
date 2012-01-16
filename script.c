@@ -85,7 +85,7 @@ static int getslave(const char* pts, const struct termios* origtty);
 static int doio(const struct termios* origtty, const int pty);
 static int doshell(const char* pts, const struct termios* origtty);
 
-static int master = -1, resizein = -1, resizeout = -1;
+static int master = -1;
 static pid_t child;
 static int childstatus;
 static const char* fname;
@@ -100,6 +100,7 @@ static int tflg = 0;
 static const char* progname;
 
 static volatile bool die;
+static volatile unsigned resized;
 
 static void
 die_if_link(const char* fn) {
@@ -210,9 +211,7 @@ main(int argc, char **argv) {
 	}
 	if (child == 0) {
 		close(master);
-		close(resizein);
-		close(resizeout);
-		master = resizein = resizeout = -1;
+		master = -1;
 		return doshell(pts, &origtty);
 	}
 
@@ -299,10 +298,40 @@ doio(const struct termios* origtty, const int pty) {
 		if (ptyout_open && ptyoutpending)
 			FD_SET(pty, &wfds);
 
-		if (resizein != -1)
-			FD_SET(resizein, &rfds);
-
 		const int ret = select(nfds, &rfds, &wfds, NULL, NULL);
+		// Process resizes ASAP
+		if (scriptpending + resize_spec_size < sizeof(scriptbuf) && resized)
+		{
+			__sync_fetch_and_sub(&resized, 1);
+
+			struct winsize win;
+			if (ioctl(STDIN_FILENO, TIOCGWINSZ, &win) == -1)
+			{
+				switch (errno)
+				{
+					case EINTR:
+						break;
+					case EBADF:
+						if (!stdin_open)
+							break;
+					default:
+						perror("ioctl(stdin, TIOCGWINSZ /* get window size */)");
+						exitcode = EX_IOERR;
+						goto restoretty;
+				}
+			}
+			else
+			{
+				// Notify PTY clients
+				ioctl(pty, TIOCSWINSZ, &win);
+
+				const int len = snprintf(scriptbuf + scriptpending, sizeof(scriptbuf) - scriptpending,
+						"\x1B[8;%hu;%hut", win.ws_row, win.ws_col);
+				if (len >= 0 && len < sizeof(scriptbuf) - scriptpending)
+					scriptpending += len;
+			}
+		}
+
 		if (ret == -1)
 		{
 			if (errno == EINTR)
@@ -403,38 +432,6 @@ doio(const struct termios* origtty, const int pty) {
 					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), _("\r\nScript done on %s\r\n"), tbuf);
 				else
 					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), "%s", _("\r\nScript done\r\n"));
-			}
-		}
-
-		// Process resizes ASAP
-		if (scriptpending + resize_spec_size < sizeof(scriptbuf) && FD_ISSET(resizein, &rfds))
-		{
-			struct winsize win;
-			ssize_t ret = read(resizein, &win, sizeof(win));
-			if (ret == -1)
-			{
-				switch (errno)
-				{
-					case EINTR:
-						break;
-					default:
-						perror("read(resizepipe)");
-						exitcode = EX_IOERR;
-						goto restoretty;
-				}
-			}
-			else if (ret == 0)
-			{
-				close(resizeout);
-				close(resizein);
-				resizein = resizeout = -1;
-			}
-			else
-			{
-				const int len = snprintf(scriptbuf + scriptpending, sizeof(scriptbuf) - scriptpending,
-						"\x1B[8;%hu;%hut", win.ws_row, win.ws_col);
-				if (len >= 0 && len < sizeof(scriptbuf) - scriptpending)
-					scriptpending += len;
 			}
 		}
 
@@ -597,28 +594,7 @@ finish(int dummy __attribute__ ((__unused__))) {
 static void
 resize(int dummy __attribute__ ((__unused__))) {
 	/* transmit window change information to the child */
-	struct winsize win;
-	ioctl(0, TIOCGWINSZ, &win);
-	ioctl(master, TIOCSWINSZ, &win);
-	for (size_t written = 0; written < sizeof(win);)
-	{
-		const ssize_t ret = write(resizeout, ((const char*)&win) + written, sizeof(win) - written);
-		if (ret == -1)
-		{
-			switch (errno)
-			{
-				case EINTR:
-					continue;
-				default:
-					/* Can't safely kill ourselves from a
-					 * signal handler, just ignore the
-					 * error instead. Killing ourselves
-					 * would leave the parent terminal in a
-					 * bad state. */
-					return;
-			}
-		}
-	}
+	__sync_fetch_and_add(&resized, 1);
 }
 
 static int
@@ -686,14 +662,6 @@ getmaster() {
 		fprintf(stderr, _("opening a pty using /dev/ptmx failed\n"));
 		fail();
 	}
-
-	int resizepipe[2];
-	if (pipe(resizepipe) == -1) {
-		fprintf(stderr, _("opening a pipe failed: %s\n"), strerror(errno));
-		fail();
-	}
-	resizein  = resizepipe[0];
-	resizeout = resizepipe[1];
 
 	resize(0);
 }
