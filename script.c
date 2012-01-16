@@ -424,15 +424,6 @@ doio(const struct termios* origtty, const int pty) {
 				scriptpending -= ret;
 				memmove(scriptbuf, scriptbuf + ret, scriptpending);
 			}
-
-			if (!scriptpending && !ptyin_open && !qflg)
-			{
-				char tbuf[256];
-				if (strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S %Z\n", gmtime(&newtime.tv_sec)))
-					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), _("\r\nScript done on %s\r\n"), tbuf);
-				else
-					scriptpending = snprintf(scriptbuf, sizeof(scriptbuf), "%s", _("\r\nScript done\r\n"));
-			}
 		}
 
 		// Fetch data from the pseudo terminal first
@@ -483,6 +474,18 @@ doio(const struct termios* origtty, const int pty) {
 				memcpy(scriptbuf + scriptpending, stdoutbuf + stdoutpending, ret);
 				stdoutpending += ret;
 				scriptpending += ret;
+			}
+
+			if (!ptyin_open && !qflg)
+			{
+				char tbuf[256];
+				int len;
+				if (strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S %Z\n", gmtime(&newtime.tv_sec)))
+					len = snprintf(scriptbuf + scriptpending, sizeof(scriptbuf) - scriptpending, _("\r\nScript done on %s\r\n"), tbuf);
+				else
+					len = snprintf(scriptbuf + scriptpending, sizeof(scriptbuf) - scriptpending, "%s", _("\r\nScript done\r\n"));
+				if (len >= 0 && len < sizeof(scriptbuf) - scriptpending)
+					scriptpending += len;
 			}
 		}
 
