@@ -83,6 +83,11 @@ Flush output after each write. This is nice for telecooperation:
 One person does `mkfifo foo; script -f foo' and another can
 supervise real-time what is being done using `cat foo'.
 .TP
+.B \-n
+Prevents overwriting of file if it exists already. Note that this still allows
+appending using
+.B \-a.
+.TP
 .B \-q
 Be quiet.
 .TP

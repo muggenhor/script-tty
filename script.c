@@ -94,6 +94,7 @@ static int aflg = 0;
 static const char* cflg = NULL;
 static int eflg = 0;
 static int fflg = 0;
+static int nflg = 0;
 static int qflg = 0;
 static int tflg = 0;
 
@@ -149,7 +150,7 @@ main(int argc, char **argv) {
 		}
 	}
 
-	while ((ch = getopt(argc, argv, "ac:efqt")) != -1)
+	while ((ch = getopt(argc, argv, "ac:efnqt")) != -1)
 		switch((char)ch) {
 		case 'a':
 			aflg++;
@@ -163,6 +164,9 @@ main(int argc, char **argv) {
 		case 'f':
 			fflg++;
 			break;
+		case 'n':
+			nflg++;
+			break;
 		case 'q':
 			qflg++;
 			break;
@@ -172,7 +176,22 @@ main(int argc, char **argv) {
 		case '?':
 		default:
 			fprintf(stderr,
-				_("usage: script [-a] [-e] [-f] [-q] [-t] [file]\n"));
+				_("usage: script [-a] [-e] [-f] [-n] [-q] [-t] [file]\n"
+				  "\n"
+				  "makes a typescript of everything printed on your terminal.\n"
+				  "It is useful for students who need a hardcopy record of an interactive\n"
+				  "session as proof of an assignment, as the typescript file\n"
+				  "can be printed out later with\n"
+				  "lpr(1).\n"
+				  "\n"
+				  "    -a          Append the output to file, retaining the prior contents.\n"
+				  "    -c COMMAND  Run the COMMAND rather than an interactive shell.\n"
+				  "    -e          Return the exit code of the child process.\n"
+				  "    -f          Flush output after each write.\n"
+				  "    -n          Prevents overwriting of file if it exists already.\n"
+				  "    -q          Be quiet (supresses script started/stopped on $date messages).\n"
+				  "    -t          Output timing data to standard error.\n"
+				  "\n"));
 			return EX_USAGE;
 		}
 	argc -= optind;
@@ -248,7 +267,7 @@ doio(const struct termios* origtty, const int pty) {
 	static const size_t delay_spec_size  = sizeof("\x1B_D;18446744073709551615.999999\x1B\\") - 1;
 	static const size_t resize_spec_size = sizeof("\x1B[8;65535;65535t") - 1;
 
-	const int scriptfd = open(fname, O_WRONLY | O_CREAT | (aflg ? O_APPEND : O_TRUNC)
+	const int scriptfd = open(fname, O_WRONLY | O_CREAT | (aflg ? O_APPEND : (nflg ? O_EXCL : O_TRUNC))
 			/* Flush data after each write when requested. */
 #if O_DSYNC
 			| (fflg ? O_DSYNC : 0)
