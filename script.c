@@ -318,6 +318,21 @@ doio(const struct termios* origtty, const int pty) {
 			FD_SET(pty, &wfds);
 
 		const int ret = select(nfds, &rfds, &wfds, NULL, NULL);
+		if (ret == -1)
+		{
+			if (errno == EINTR)
+			{
+				FD_ZERO(&rfds);
+				FD_ZERO(&wfds);
+			}
+			else
+			{
+				perror("select");
+				exitcode = EX_OSERR;
+				goto restoretty;
+			}
+		}
+
 		// Process resizes ASAP
 		if (scriptpending + resize_spec_size < sizeof(scriptbuf) && resized)
 		{
@@ -349,15 +364,6 @@ doio(const struct termios* origtty, const int pty) {
 				if (len >= 0 && len < sizeof(scriptbuf) - scriptpending)
 					scriptpending += len;
 			}
-		}
-
-		if (ret == -1)
-		{
-			if (errno == EINTR)
-				continue;
-			perror("select");
-			exitcode = EX_OSERR;
-			goto restoretty;
 		}
 
 		gettimeofday(&newtime, NULL);
