@@ -38,6 +38,8 @@
  * 2000-07-30 Per Andreas Buer <per@linpro.no> - added "q"-option
  */
 
+#define _XOPEN_SOURCE 500
+
 /*
  * script
  */
@@ -71,7 +73,7 @@
 #define NULL ((void*)0)
 
 #ifndef _PATH_BSHELL
-# define _PATH_BSHELL "/home/gschijnd/usr/bin/zsh"
+# define _PATH_BSHELL "/bin/sh"
 #endif
 
 #define BUFSIZE (65536UL)
@@ -699,8 +701,10 @@ getslave(const char* pts, const struct termios* origtty) {
 	const int slave = open(pts, O_RDWR);
 
 	if (slave == -1
+#if SOLARIS
 	 || ioctl(slave, I_PUSH, "ptem") == -1   /* push ptem */
 	 || ioctl(slave, I_PUSH, "ldterm") == -1 /* push ldterm*/
+#endif
 	 ) {
 		perror(pts);
 		fail();
