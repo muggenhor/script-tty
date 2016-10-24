@@ -87,7 +87,7 @@ static int doshell(const char* pts, const struct termios* origtty);
 
 static int master = -1;
 static pid_t child;
-static int childstatus;
+static volatile int childstatus;
 static const char* fname;
 
 static int aflg = 0;
@@ -544,7 +544,7 @@ doio(const struct termios* origtty, const int pty) {
 		// Close all unused endpoints & file descriptors
 		for (;;)
 		{
-			// Close our output channels when the other input channels are closed (i.e. they're won't be any new data to send
+			// Close our output channels when the other input channels are closed (i.e. their won't be any new data to send
 			if (stdout_open && !stdoutpending && !ptyin_open)
 			{
 				if (!stdin_open)
@@ -576,7 +576,7 @@ doio(const struct termios* origtty, const int pty) {
 				stdin_open = false;
 				continue;
 			}
-			if (ptyin_open && !stdout_open)
+			if (ptyin_open && (!stdout_open || die))
 			{
 				ptyin_open = false;
 				if (!ptyout_open)
